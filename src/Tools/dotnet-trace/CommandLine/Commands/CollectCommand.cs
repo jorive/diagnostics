@@ -9,7 +9,9 @@ using System.CommandLine;
 using System.CommandLine.Rendering;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -27,8 +29,9 @@ namespace Microsoft.Diagnostics.Tools.Trace
         /// <param name="providers">A list of EventPipe providers to be enabled. This is in the form 'Provider[,Provider]', where Provider is in the form: '(GUID|KnownProviderName)[:Flags[:Level][:KeyValueArgs]]', and KeyValueArgs is in the form: '[key1=value1][;key2=value2]'</param>
         /// <param name="profile">A named pre-defined set of provider configurations that allows common tracing scenarios to be specified succinctly.</param>
         /// <param name="format">The desired format of the created trace file.</param>
+        /// <param name="pack">Automatically runs the pack command after collection is complete. Use dotnet-trace pack --help for more details.</param>
         /// <returns></returns>
-        private static async Task<int> Collect(IConsole console, int processId, FileInfo output, uint buffersize, string providers, string profile, TraceFileFormat format)
+        private static async Task<int> Collect(IConsole console, int processId, FileInfo output, uint buffersize, string providers, string profile, TraceFileFormat format, bool pack)
         {
             try
             {
@@ -154,7 +157,8 @@ namespace Microsoft.Diagnostics.Tools.Trace
                         shouldExit.Set();
                     };
 
-                    do {
+                    do
+                    {
                         while (!Console.KeyAvailable && !shouldExit.WaitOne(250)) { }
                     } while (!shouldExit.WaitOne(0) && Console.ReadKey(true).Key != ConsoleKey.Enter);
 
@@ -165,11 +169,32 @@ namespace Microsoft.Diagnostics.Tools.Trace
                     await collectingTask;
                 }
 
-                Console.Out.WriteLine();
-                Console.Out.WriteLine("Trace completed.");
+                Console.Out.WriteLine($"{Environment.NewLine}Trace completed.");
 
-                if (format != TraceFileFormat.Netperf)
-                    TraceFileFormatConverter.ConvertToFormat(format, output.FullName);
+                if (pack)
+                {
+                    var archiveFileName = $"{output.FullName}.zip";
+                    Console.Out.WriteLine($"Packing     : {archiveFileName}");
+                    if (File.Exists(archiveFileName))
+                        File.Delete(archiveFileName);
+                    using (var archive = ZipFile.Open(archiveFileName, ZipArchiveMode.Create))
+                    {
+                        archive.CreateEntryFromFile(output.FullName, output.Name);
+
+                        // Add runtime symbols.
+                        var di = new DirectoryInfo(Path.GetDirectoryName(process.MainModule.FileName));
+                        foreach (var file in di.EnumerateFiles("*.pdb"))
+                        {
+                            Console.Out.WriteLine($"\t{file.FullName}");
+                            archive.CreateEntryFromFile(file.FullName, file.Name);
+                        }
+
+                        // TODO: Add App Symbols?
+                        var modules = process.Modules.AsQueryable();
+                        foreach (ProcessModule module in process.Modules)
+                            Console.Out.WriteLine($"\t{module.FileName}");
+                    }
+                }
 
                 return failed ? ErrorCodes.TracingError : 0;
             }
@@ -208,9 +233,9 @@ namespace Microsoft.Diagnostics.Tools.Trace
                     prevBufferWidth = Console.BufferWidth;
                     clearLineString = new string(' ', Console.BufferWidth - 1);
                 }
-                Console.SetCursorPosition(0,lineToClear);
+                Console.SetCursorPosition(0, lineToClear);
                 Console.Out.Write(clearLineString);
-                Console.SetCursorPosition(0,lineToClear);
+                Console.SetCursorPosition(0, lineToClear);
             }
         }
 
@@ -226,8 +251,11 @@ namespace Microsoft.Diagnostics.Tools.Trace
                 return $"{length / 1.0:0.00##} (byte)";
         }
 
-        public static Command CollectCommand() =>
-            new Command(
+        public static Command CollectCommand()
+        {
+            var methodInfo = typeof(CollectCommandHandler)
+                .GetMethod(nameof(Collect), BindingFlags.NonPublic | BindingFlags.Static);
+            return new Command(
                 name: "collect",
                 description: "Collects a diagnostic trace from a currently running process",
                 symbols: new Option[] {
@@ -237,8 +265,10 @@ namespace Microsoft.Diagnostics.Tools.Trace
                     ProvidersOption(),
                     ProfileOption(),
                     CommonOptions.FormatOption(),
+                    PackOption(),
                 },
-                handler: System.CommandLine.Invocation.CommandHandler.Create<IConsole, int, FileInfo, uint, string, string, TraceFileFormat>(Collect));
+                handler: System.CommandLine.Invocation.CommandHandler.Create(method: methodInfo));
+        }
 
         private static uint DefaultCircularBufferSizeInMB => 256;
 
@@ -270,6 +300,13 @@ namespace Microsoft.Diagnostics.Tools.Trace
                 alias: "--profile",
                 description: @"A named pre-defined set of provider configurations that allows common tracing scenarios to be specified succinctly.",
                 argument: new Argument<string>(defaultValue: "runtime-basic") { Name = "profile_name" },
+                isHidden: false);
+
+        private static Option PackOption() =>
+            new Option(
+                alias: "--pack",
+                description: $"Automatically runs the pack command after collection is complete. Use dotnet-trace pack --help for more details.",
+                argument: new Argument<bool>(defaultValue: false),
                 isHidden: false);
     }
 }
