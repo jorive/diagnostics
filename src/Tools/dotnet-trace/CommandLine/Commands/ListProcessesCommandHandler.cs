@@ -27,11 +27,11 @@ namespace Microsoft.Diagnostics.Tools.Trace
                 {
                     try
                     {
-                        Console.Out.WriteLine($"{process.Id, 10} {process.ProcessName, -10} {process.MainModule.FileName}");
+                        Console.Out.WriteLine($"{process.Id,10} {process.ProcessName,-10} {process.MainModule.FileName}");
                     }
                     catch (Exception)
                     {
-                        Console.Out.WriteLine($"{process.Id, 10} {process.ProcessName, -10} [Elevated process - cannot determine path]");
+                        Console.Out.WriteLine($"{process.Id,10} {process.ProcessName,-10} [Elevated process - cannot determine path]");
                     }
                 }
 

@@ -36,21 +36,14 @@ namespace Microsoft.Diagnostics.Tools.Trace
         {
             try
             {
-                Debug.Assert(output != null);
-                Debug.Assert(profile != null);
-                if (processId <= 0)
-                {
-                    Console.Error.WriteLine("Process ID should not be negative.");
-                    return ErrorCodes.ArgumentError;
-                }
+                if (output == null) throw new ArgumentNullException(nameof(output));
+                if (profile == null) throw new ArgumentNullException(nameof(profile));
+                if (processId <= 0) throw new ArgumentException($"Invalid process ID: {processId}");
 
                 var selectedProfile = ListProfilesCommandHandler.DotNETRuntimeProfiles
                     .FirstOrDefault(p => p.Name.Equals(profile, StringComparison.OrdinalIgnoreCase));
-                if (selectedProfile == null)
-                {
-                    Console.Error.WriteLine($"Invalid profile name: {profile}");
-                    return ErrorCodes.ArgumentError;
-                }
+                if (selectedProfile == null) // TODO: Validation could happen when the command line argument is parsed.
+                    throw new ArgumentException($"Invalid profile name: {profile}");
 
                 var providerCollection = Extensions.ToProviders(providers);
                 var profileProviders = new List<Provider>();
@@ -58,118 +51,127 @@ namespace Microsoft.Diagnostics.Tools.Trace
                 // If user defined a different key/level on the same provider via --providers option that was specified via --profile option,
                 // --providers option takes precedence. Go through the list of providers specified and only add it if it wasn't specified
                 // via --providers options.
-                if (selectedProfile.Providers != null)
+                Debug.Assert(selectedProfile.Providers != null);
+
+                foreach (Provider selectedProfileProvider in selectedProfile.Providers)
                 {
-                    foreach (Provider selectedProfileProvider in selectedProfile.Providers)
+                    var shouldAdd = true;
+
+                    foreach (Provider providerCollectionProvider in providerCollection)
                     {
-                        bool shouldAdd = true;
-
-                        foreach (Provider providerCollectionProvider in providerCollection)
+                        if (providerCollectionProvider.Name.Equals(selectedProfileProvider.Name))
                         {
-                            if (providerCollectionProvider.Name.Equals(selectedProfileProvider.Name))
-                            {
-                                shouldAdd = false;
-                                break;
-                            }
-                        }
-
-                        if (shouldAdd)
-                        {
-                            profileProviders.Add(selectedProfileProvider);
+                            shouldAdd = false;
+                            break;
                         }
                     }
+
+                    if (shouldAdd)
+                        profileProviders.Add(selectedProfileProvider);
                 }
 
                 providerCollection.AddRange(profileProviders);
 
                 if (providerCollection.Count <= 0)
-                {
-                    Console.Error.WriteLine("No providers were specified to start a trace.");
-                    return ErrorCodes.ArgumentError;
-                }
+                    throw new ArgumentException("No providers were specified to start a trace.");
 
                 PrintProviders(providerCollection);
 
-                var process = Process.GetProcessById(processId);
                 var configuration = new SessionConfiguration(
                     circularBufferSizeMB: buffersize,
                     format: EventPipeSerializationFormat.NetTrace,
                     providers: providerCollection);
 
-                var shouldExit = new ManualResetEvent(false);
                 var failed = false;
-                var terminated = false;
-
-                ct.Register(() => shouldExit.Set());
-
-                ulong sessionId = 0;
-                using (Stream stream = EventPipeClient.CollectTracing(processId, configuration, out sessionId))
-                using (VirtualTerminalMode vTermMode = VirtualTerminalMode.TryEnable())
+                using (var shouldExit = new ManualResetEvent(false))
                 {
-                    if (sessionId == 0)
+                    var terminated = false;
+
+                    ct.Register(() => shouldExit.Set());
+
+                    ulong sessionId = 0;
+                    using (Stream stream = EventPipeClient.CollectTracing(processId, configuration, out sessionId))
+                    using (VirtualTerminalMode vTermMode = VirtualTerminalMode.TryEnable())
                     {
-                        Console.Error.WriteLine("Unable to create session.");
-                        return ErrorCodes.SessionCreationError;
-                    }
-
-                    var collectingTask = new Task(() => {
-                        try
+                        if (sessionId == 0)
                         {
-                            using (var fs = new FileStream(output.FullName, FileMode.Create, FileAccess.Write))
+                            Console.Error.WriteLine("Unable to create session.");
+                            return ErrorCodes.SessionCreationError;
+                        }
+
+                        using (var collectingTask = new Task(() => {
+                            try
                             {
-                                Console.Out.WriteLine($"Process     : {process.MainModule.FileName}");
-                                Console.Out.WriteLine($"Output File : {fs.Name}");
-                                Console.Out.WriteLine($"\tSession Id: 0x{sessionId:X16}");
-                                lineToClear = Console.CursorTop;
-                                var buffer = new byte[16 * 1024];
-
-                                while (true)
+                                using (var fs = new FileStream(output.FullName, FileMode.Create, FileAccess.Write))
                                 {
-                                    int nBytesRead = stream.Read(buffer, 0, buffer.Length);
-                                    if (nBytesRead <= 0)
-                                        break;
-                                    fs.Write(buffer, 0, nBytesRead);
+                                    Console.Out.WriteLine($"Process     : {Process.GetProcessById(processId).MainModule.FileName}");
+                                    Console.Out.WriteLine($"Output File : {fs.Name}");
+                                    Console.Out.WriteLine($"\tSession Id: 0x{sessionId:X16}");
+                                    lineToClear = Console.CursorTop;
+                                    var buffer = new byte[16 * 1024];
 
-                                    ResetCurrentConsoleLine(vTermMode.IsEnabled);
-                                    Console.Out.Write($"\tRecording trace {GetSize(fs.Length)}");
+                                    while (true)
+                                    {
+                                        int nBytesRead = stream.Read(buffer, 0, buffer.Length);
+                                        if (nBytesRead <= 0)
+                                            break;
+                                        fs.Write(buffer, 0, nBytesRead);
 
-                                    Debug.WriteLine($"PACKET: {Convert.ToBase64String(buffer, 0, nBytesRead)} (bytes {nBytesRead})");
+                                        ResetCurrentConsoleLine(vTermMode.IsEnabled);
+                                        Console.Out.Write($"\tRecording trace {GetSize(fs.Length)}");
+
+                                        Debug.WriteLine($"PACKET: {Convert.ToBase64String(buffer, 0, nBytesRead)} (bytes {nBytesRead})");
+                                    }
                                 }
                             }
-                        }
-                        catch (Exception ex)
+                            catch (Exception ex)
+                            {
+                                failed = true;
+                                Console.Error.WriteLine($"[ERROR] {ex.Message}");
+                                Debug.WriteLine($"[ERROR] {ex.ToString()}");
+                            }
+                            finally
+                            {
+                                terminated = true;
+                                shouldExit.Set();
+                            }
+                        }))
                         {
-                            failed = true;
-                            Console.Error.WriteLine($"[ERROR] {ex.ToString()}");
+                            collectingTask.Start();
+
+                            Console.Out.WriteLine("Press <Enter> or <Ctrl+C> to exit...");
+
+                            do
+                            {
+                                while (!Console.KeyAvailable && !shouldExit.WaitOne(250)) { }
+                            } while (!shouldExit.WaitOne(0) && Console.ReadKey(true).Key != ConsoleKey.Enter);
+
+                            if (!terminated)
+                            {
+                                EventPipeClient.StopTracing(processId, sessionId);
+                            }
+                            await collectingTask;
                         }
-                        finally
-                        {
-                            terminated = true;
-                            shouldExit.Set();
-                        }
-                    });
-                    collectingTask.Start();
-
-                    Console.Out.WriteLine("Press <Enter> or <Ctrl+C> to exit...");
-
-                    do {
-                        while (!Console.KeyAvailable && !shouldExit.WaitOne(250)) { }
-                    } while (!shouldExit.WaitOne(0) && Console.ReadKey(true).Key != ConsoleKey.Enter);
-
-                    if (!terminated)
-                    {
-                        EventPipeClient.StopTracing(processId, sessionId);
                     }
-                    await collectingTask;
+
+                    Console.Out.WriteLine();
+                    Console.Out.WriteLine("Trace completed.");
+
+                    if (format != TraceFileFormat.NetTrace)
+                        TraceFileFormatConverter.ConvertToFormat(format, output.FullName);
                 }
 
-                Console.Out.WriteLine();
-                Console.Out.WriteLine("Trace completed.");
-
-                if (format != TraceFileFormat.NetTrace)
-                    TraceFileFormatConverter.ConvertToFormat(format, output.FullName);
-
                 return failed ? ErrorCodes.TracingError : 0;
+            }
+            catch (ArgumentNullException ex)
+            {
+                Console.Error.WriteLine($"[ERROR] Undefined argument '{ex.ParamName}'");
+                return ErrorCodes.ArgumentError;
+            }
+            catch (ArgumentException ex)
+            {
+                Console.Error.WriteLine($"[ERROR] {ex.Message}");
+                return ErrorCodes.ArgumentError;
             }
             catch (Exception ex)
             {
@@ -206,9 +208,9 @@ namespace Microsoft.Diagnostics.Tools.Trace
                     prevBufferWidth = Console.BufferWidth;
                     clearLineString = new string(' ', Console.BufferWidth - 1);
                 }
-                Console.SetCursorPosition(0,lineToClear);
+                Console.SetCursorPosition(0, lineToClear);
                 Console.Out.Write(clearLineString);
-                Console.SetCursorPosition(0,lineToClear);
+                Console.SetCursorPosition(0, lineToClear);
             }
         }
 

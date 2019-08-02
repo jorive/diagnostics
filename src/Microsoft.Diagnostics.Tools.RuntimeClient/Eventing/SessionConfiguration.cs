@@ -70,7 +70,7 @@ namespace Microsoft.Diagnostics.Tools.RuntimeClient
 
     public class SessionConfigurationV2 : SessionConfiguration
     {
-        public SessionConfigurationV2(uint circularBufferSizeMB, EventPipeSerializationFormat format, bool requestRundown, IReadOnlyCollection<Provider> providers) : base(circularBufferSizeMB, format, providers)
+        public SessionConfigurationV2(uint circularBufferSizeMB, EventPipeSerializationFormat format, IReadOnlyCollection<Provider> providers, bool requestRundown) : base(circularBufferSizeMB, format, providers)
         {
             RequestRundown = requestRundown;
         }

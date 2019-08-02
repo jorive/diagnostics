@@ -2,22 +2,22 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.Collections.Generic;
-using System.IO;
 using Microsoft.Diagnostics.Symbols;
 using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Etlx;
 using Microsoft.Diagnostics.Tracing.Stacks;
 using Microsoft.Diagnostics.Tracing.Stacks.Formats;
+using System;
+using System.Collections.Generic;
+using System.IO;
 
 namespace Microsoft.Diagnostics.Tools.Trace
 {
-    internal enum TraceFileFormat { NetTrace, Speedscope };
+    internal enum TraceFileFormat { NetTrace, Speedscope }
 
     internal static class TraceFileFormatConverter
     {
-        private static Dictionary<TraceFileFormat, string> TraceFileFormatExtensions = new Dictionary<TraceFileFormat, string>() {
+        private static readonly Dictionary<TraceFileFormat, string> TraceFileFormatExtensions = new Dictionary<TraceFileFormat, string>() {
             { TraceFileFormat.NetTrace,     "nettrace" },
             { TraceFileFormat.Speedscope,   "speedscope.json" }
         };
@@ -47,25 +47,25 @@ namespace Microsoft.Diagnostics.Tools.Trace
         private static void ConvertToSpeedscope(string fileToConvert, string outputFilename)
         {
             var etlxFilePath = TraceLog.CreateFromEventPipeDataFile(fileToConvert);
-            using (var symbolReader = new SymbolReader(System.IO.TextWriter.Null) { SymbolPath = SymbolPath.MicrosoftSymbolServerPath })
-            using (var eventLog = new TraceLog(etlxFilePath))
+            using (var symbolReader = new SymbolReader(System.IO.TextWriter.Null) {
+                SymbolPath = SymbolPath.MicrosoftSymbolServerPath
+            })
             {
-                var stackSource = new MutableTraceEventStackSource(eventLog)
+                using (var eventLog = new TraceLog(etlxFilePath))
                 {
-                    OnlyManagedCodeStacks = true // EventPipe currently only has managed code stacks.
-                };
+                    var stackSource = new MutableTraceEventStackSource(eventLog) {
+                        OnlyManagedCodeStacks = true // EventPipe currently only has managed code stacks.
+                    };
 
-                var computer = new SampleProfilerThreadTimeComputer(eventLog, symbolReader);
-                computer.GenerateThreadTimeStacks(stackSource);
+                    var computer = new SampleProfilerThreadTimeComputer(eventLog, symbolReader);
+                    computer.GenerateThreadTimeStacks(stackSource);
 
-                SpeedScopeStackSourceWriter.WriteStackViewAsJson(stackSource, outputFilename);
+                    SpeedScopeStackSourceWriter.WriteStackViewAsJson(stackSource, outputFilename);
+                }
             }
 
             if (File.Exists(etlxFilePath))
-            {
                 File.Delete(etlxFilePath);
-            }
-            
         }
     }
 }

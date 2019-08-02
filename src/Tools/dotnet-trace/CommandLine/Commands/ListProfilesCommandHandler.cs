@@ -13,7 +13,7 @@ using System.Threading.Tasks;
 
 namespace Microsoft.Diagnostics.Tools.Trace
 {
-    internal sealed class ListProfilesCommandHandler
+    internal static class ListProfilesCommandHandler
     {
         public static async Task<int> GetProfiles(IConsole console)
         {
@@ -48,7 +48,7 @@ namespace Microsoft.Diagnostics.Tools.Trace
                     new Provider("Microsoft-Windows-DotNETRuntime", (ulong)ClrTraceEventParser.Keywords.Default, EventLevel.Informational),
                 },
                 "Useful for tracking CPU usage and general runtime information. This the default option if no profile is specified."),
-#if DEBUG // Coming soon: Preview6
+#if DEBUG
             new Profile(
                 "gc",
                 new Provider[] {
@@ -69,7 +69,6 @@ namespace Microsoft.Diagnostics.Tools.Trace
             new Profile(
                 "gc-collect",
                 new Provider[] {
-                    new Provider("Microsoft-DotNETCore-SampleProfiler"),
                     new Provider(
                         name: "Microsoft-Windows-DotNETRuntime",
                         keywords:   (ulong)ClrTraceEventParser.Keywords.GC |

@@ -5,14 +5,10 @@
 using Microsoft.Diagnostics.Tools.RuntimeClient.DiagnosticsIpc;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.IO.Pipes;
 using System.Linq;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 using System.Text.RegularExpressions;
 
 namespace Microsoft.Diagnostics.Tools.RuntimeClient
@@ -60,7 +56,7 @@ namespace Microsoft.Diagnostics.Tools.RuntimeClient
         public static IEnumerable<int> ListAvailablePorts()
         {
             return Directory.GetFiles(IpcRootPath)
-                .Select(namedPipe => (new FileInfo(namedPipe)).Name)
+                .Select(ipcName => (new FileInfo(ipcName)).Name)
                 .Where(input => Regex.IsMatch(input, DiagnosticsPortPattern))
                 .Select(input => int.Parse(Regex.Match(input, DiagnosticsPortPattern).Groups[1].Value, NumberStyles.Integer));
         }
